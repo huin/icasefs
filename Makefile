@@ -6,7 +6,7 @@ clean:
 fmt:
 	@go fmt *.go
 
-icasefs:
+icasefs: *.go
 	@go build -o icasefs *.go
 
 .PHONY: all clean fmt test
