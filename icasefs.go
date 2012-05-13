@@ -278,43 +278,20 @@ func (fs *FS) Symlink(value string, linkName string, context *fuse.Context) (cod
 
 // {{{ Complex operations.
 
-// TODO func (fs *FS) Link(oldName string, newName string, context *fuse.Context) (code fuse.Status)
+func (fs *FS) Link(oldName string, newName string, context *fuse.Context) (code fuse.Status) {
+	fs.OldNewCaseMatchingRetry(oldName, newName, func(oldNameAttempt, newNameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Link(oldNameAttempt, newNameAttempt, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
 
 func (fs *FS) Rename(oldName string, newName string, context *fuse.Context) (code fuse.Status) {
-	code = fs.LoopbackFileSystem.Rename(oldName, newName, context)
-	if code != fuse.ENOENT {
-		return code
-	}
-
-	// We need oldName to exist.
-	if _, err := os.Stat(oldName); err != nil {
-		if os.IsNotExist(err) {
-			oldName, code = fs.MatchAndLogIcasePath(oldName)
-			if !code.Ok() {
-				return code
-			}
-		} else {
-			return fuse.ToStatus(err)
-		}
-	}
-
-	// We need the parent of newName to exist.
-	parentNewName, baseNewName := pathSplit(newName)
-	if parentNewName != "" {
-		if _, err := os.Stat(parentNewName); err != nil {
-			if os.IsNotExist(err) {
-				parentNewName, code = fs.MatchAndLogIcasePath(parentNewName)
-				if !code.Ok() {
-					return code
-				}
-				newName = filepath.Join(parentNewName, baseNewName)
-			} else {
-				return fuse.ToStatus(err)
-			}
-		}
-	}
-
-	return fs.LoopbackFileSystem.Rename(oldName, newName, context)
+	fs.OldNewCaseMatchingRetry(oldName, newName, func(oldNameAttempt, newNameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Rename(oldNameAttempt, newNameAttempt, context)
+		return code == fuse.ENOENT
+	})
+	return
 }
 
 // }}} Complex operations.
@@ -352,8 +329,48 @@ func (fs *FS) ParentCaseMatchingRetry(name string, op func(string) bool) {
 	}
 }
 
+// OldNewCaseMatchingRetry is similar to CaseMatchingRetry, but attempts case
+// matching on oldName, and parent case matching on newName.
+func (fs *FS) OldNewCaseMatchingRetry(oldName, newName string, op func(string, string) bool) {
+
+	if !op(oldName, newName) {
+		return
+	}
+
+	var code fuse.Status
+
+	// We need oldName to exist.
+	if _, err := os.Stat(oldName); err != nil {
+		if os.IsNotExist(err) {
+			oldName, code = fs.MatchAndLogIcasePath(oldName)
+			if !code.Ok() {
+				return
+			}
+		} else {
+			return
+		}
+	}
+
+	// We need the parent of newName to exist.
+	if parentNewName, _ := pathSplit(newName); parentNewName != "" {
+		if _, err := os.Stat(parentNewName); err != nil {
+			if os.IsNotExist(err) {
+				newName, code = fs.ParentMatchAndLogIcasePath(newName)
+				if !code.Ok() {
+					return
+				}
+			} else {
+				return
+			}
+		}
+	}
+
+	op(oldName, newName)
+}
+
 func (fs *FS) MatchAndLogIcasePath(name string) (matchedName string, code fuse.Status) {
 	// TODO Consider a cache of recent successful matches, but not for failures.
+	// Remember that method invocations run in separate goroutines.
 
 	matchedNames, err := fs.FindMatchingIcasePaths(name)
 	if err != nil {

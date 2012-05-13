@@ -80,6 +80,11 @@ function ASSERT_SYMLINK() {
     cleanup_files="$cleanup_files $2"
 }
 
+function ASSERT_HARDLINK() {
+    ln $1 $2 || FAIL "Could not create hard link: $2"
+    cleanup_files="$cleanup_files $2"
+}
+
 function ASSERT_RENAME() {
     mv $1 $2 || FAIL "Count not rename $1 to $2"
     cleanup_files="$cleanup_files $2"
@@ -118,6 +123,11 @@ ASSERT_CREATE_FILE $MNT/ItEms/created_file
 ASSERT_SYMLINK lowercase $MNT/ItEms/created_symlink
 ASSERT_EXISTS $MNT/ItEms/created_symlink
 
+# Create hard link.
+# TODO - this doesn't work. Maybe requires inode tracking?
+#ASSERT_CREATE_FILE $MNT/ItEms/orig_hardlink
+#ASSERT_HARDLINK $MNT/ItEms/orig_hardlink $MNT/ItEms/new_hardlink
+
 # Create directory.
 ASSERT_MKDIR $MNT/ItEms/created_directory
 
@@ -128,6 +138,10 @@ ASSERT_EXISTS $MNT/renamed
 ASSERT_CREATE_FILE $MNT/created_for_move
 ASSERT_RENAME $MNT/created_for_move $MNT/ItEms/created_for_move
 ASSERT_EXISTS $MNT/ItEms/created_for_move
+
+ASSERT_CREATE_FILE $MNT/created_for_rename
+ASSERT_RENAME $MNT/created_for_rename $MNT/ItEms/was_created_for_rename
+ASSERT_EXISTS $MNT/ItEms/was_created_for_rename
 
 teardown
 
