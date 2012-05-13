@@ -47,41 +47,60 @@ func NewFS(root string) *FS {
 // Methods implementing fuse.FileSystem.
 
 func (fs *FS) GetAttr(name string, context *fuse.Context) (attr *fuse.Attr, code fuse.Status) {
-	fs.CaseMatchingRetry(name, func(nameAttempt string) fuse.Status {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		attr, code = fs.LoopbackFileSystem.GetAttr(nameAttempt, context)
-		return code
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) GetXAttr(name string, attribute string, context *fuse.Context) (data []byte, code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		data, code = fs.LoopbackFileSystem.GetXAttr(nameAttempt, attribute, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) ListXAttr(name string, context *fuse.Context) (attributes []string, code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		attributes, code = fs.LoopbackFileSystem.ListXAttr(nameAttempt, context)
+		return code == fuse.ENOENT
 	})
 	return
 }
 
 func (fs *FS) Open(name string, flags uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
-	// TODO consider case of creating a new file in a directory whose path's case
-	// mismatches.
-	fs.CaseMatchingRetry(name, func(nameAttempt string) fuse.Status {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		file, code = fs.LoopbackFileSystem.Open(nameAttempt, flags, context)
-		return code
+		// TODO consider case of creating a new file in a directory whose path's
+		// case mismatches.
+		return code == fuse.ENOENT
 	})
 	return
 }
 
 func (fs *FS) OpenDir(name string, context *fuse.Context) (c chan fuse.DirEntry, code fuse.Status) {
-	fs.CaseMatchingRetry(name, func(nameAttempt string) fuse.Status {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		c, code = fs.LoopbackFileSystem.OpenDir(nameAttempt, context)
-		return code
+		return code == fuse.ENOENT
 	})
 	return
 }
 
 // Utility methods.
 
-func (fs *FS) CaseMatchingRetry(name string, op func(string) fuse.Status) {
-	code := op(name)
-	if code != fuse.ENOENT {
+// CaseMatchingRetry attempts the operation for the given path with
+// case-insentive retry. If the operation returns true, then it attempts to
+// find a new case-insensitive path, and will attempt the operation once again
+// with a match - iff it finds one. Note that even if this second attempt
+// returns true, it will not be called a third time.
+func (fs *FS) CaseMatchingRetry(name string, op func(string) bool) {
+	if !op(name) {
 		return
 	}
 
 	matchedName, code := fs.MatchAndLogIcasePath(name)
-	log.Println(name, matchedName)
 	if code.Ok() {
 		op(matchedName)
 	}
