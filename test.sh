@@ -50,6 +50,12 @@ function FAIL() {
     failure=1
 }
 
+skipped=0
+function SKIP() {
+    echo "SKIP: $*" >&2
+    skipped=1
+}
+
 function ASSERT_EXISTS() {
     for f in $*; do
         [ -e "$f" ] || FAIL "Does not exist: $f"
@@ -124,7 +130,7 @@ ASSERT_SYMLINK lowercase $MNT/ItEms/created_symlink
 ASSERT_EXISTS $MNT/ItEms/created_symlink
 
 # Create hard link.
-# TODO - this doesn't work. Maybe requires inode tracking?
+SKIP "hard links do not work. Maybe requires inode tracking?"
 #ASSERT_CREATE_FILE $MNT/ItEms/orig_hardlink
 #ASSERT_HARDLINK $MNT/ItEms/orig_hardlink $MNT/ItEms/new_hardlink
 
@@ -144,6 +150,10 @@ ASSERT_RENAME $MNT/created_for_rename $MNT/ItEms/was_created_for_rename
 ASSERT_EXISTS $MNT/ItEms/was_created_for_rename
 
 teardown
+
+if [ "$skipped" -eq "1" ]; then
+    echo "Some tests skipped"
+fi
 
 if [ "$failure" -eq "1" ]; then
     echo "Tests failed."
