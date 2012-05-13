@@ -16,12 +16,15 @@ function create_test_files() {
 
 cleanup_dirs=""
 function create_test_dirs() {
-    mkdir -p $* || FATAL "coult not create test directories"
-    cleanup_dirs="$cleanup_dirs $*"
+    for d in $*; do
+        mkdir $d || FATAL "could not create test directory $d"
+        cleanup_dirs="$d $cleanup_dirs"
+    done
 }
 
 function setup() {
-    create_test_dirs $ROOT/{empty,items} $ROOT $MNT scratch
+    mkdir scratch $MNT
+    create_test_dirs $ROOT $ROOT/{empty,items}
     create_test_files $ROOT/file_in_root
     create_test_files $ROOT/items/{lowercase,UPPERCASE,MixedCase}
     create_test_files $ROOT/ambiguous_{file,FILE}
@@ -34,9 +37,10 @@ function setup() {
 }
 
 function teardown() {
-    fusermount -u $MNT
-    rm $cleanup_files
+    rm -f $cleanup_files
     rmdir $cleanup_dirs
+    fusermount -u $MNT
+    rmdir $MNT scratch
 }
 
 failure=0
@@ -49,6 +53,25 @@ function ASSERT_EXISTS() {
     for f in $*; do
         [ -e "$f" ] || FAIL "Does not exist: $f"
     done
+}
+
+function ASSERT_CREATE_FILE() {
+    touch $1 || FAIL "Could not create file: $1"
+    cleanup_files="$cleanup_files $1"
+}
+
+function ASSERT_APPEND_FILE() {
+    echo "appended" >> $1 || FAIL "Could not append to file: $1"
+    cleanup_files="$cleanup_files $1"
+}
+
+function ASSERT_MKDIR() {
+    mkdir $1 || FAIL "Could not mkdir: $1"
+    cleanup_dirs="$1 $cleanup_dirs"
+}
+
+function ASSERT_CONTAINS() {
+    grep -q $1 $2 || FAIL "File $2 does not contain $1"
 }
 
 setup
@@ -69,6 +92,13 @@ ASSERT_EXISTS $MNT/iTEms/{loWERCase,UPpercASE,MiXEDcase}
 
 # File that is ambiguous exists.
 ASSERT_EXISTS $MNT/ambiguous_fILe
+
+# Create file at root.
+ASSERT_CREATE_FILE $MNT/created_file
+ASSERT_EXISTS $MNT/created_file
+# And append to it.
+ASSERT_APPEND_FILE $MNT/created_file
+ASSERT_CONTAINS appended $MNT/created_file
 
 teardown
 
