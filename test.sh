@@ -22,7 +22,9 @@ function create_test_dirs() {
 
 function setup() {
     create_test_dirs $ROOT/{empty,items} $ROOT $MNT scratch
-    create_test_files $ROOT/file_in_root $ROOT/items/{lowercase,UPPERCASE,MixedCase}
+    create_test_files $ROOT/file_in_root
+    create_test_files $ROOT/items/{lowercase,UPPERCASE,MixedCase}
+    create_test_files $ROOT/ambiguous_{file,FILE}
 
     make || exit 1
     ./icasefs -log_filename=icasefs.log $MNT $ROOT &
@@ -54,6 +56,7 @@ setup
 # Files whose name exists as-is should exist as normal.
 ASSERT_EXISTS $MNT/{,empty,items}
 ASSERT_EXISTS $MNT/items/{lowercase,UPPERCASE,MixedCase}
+ASSERT_EXISTS $MNT/{ambiguous_file,ambiguous_FILE}
 
 # Files whose name case differences should exist
 ASSERT_EXISTS $MNT/eMpTy
@@ -63,6 +66,9 @@ ASSERT_EXISTS $MNT/items/{loWERCase,UPpercASE,MiXEDcase}
 # Files whose parent directories' case differs should exist.
 ASSERT_EXISTS $MNT/ItEms
 ASSERT_EXISTS $MNT/iTEms/{loWERCase,UPpercASE,MiXEDcase}
+
+# File that is ambiguous exists.
+ASSERT_EXISTS $MNT/ambiguous_fILe
 
 teardown
 

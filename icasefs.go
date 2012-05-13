@@ -12,13 +12,32 @@ import (
 	"github.com/hanwen/go-fuse/fuse"
 )
 
-// {{{ main.
+// {{{ flags.
+
+var (
+	logFilename = flag.String("log_filename", "", "Log output. Defaults to stderr.")
+)
+
+// }}} flags.
+
+// {{{ main and sundries.
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprint(os.Stderr, "Usage:\n  icasefs [options] MOUNTPOINT ORIGDIR\n")
+		flag.PrintDefaults()
+	}
+
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fmt.Fprint(os.Stderr, "Usage:\n  icasefs MOUNTPOINT ORIGDIR\n")
+		flag.Usage()
 		os.Exit(1)
+	}
+
+	if logFile, err := configureLogging(); err != nil {
+		log.Fatalf("Error configuring logging: %v", err)
+	} else if logFile != nil {
+		defer logFile.Close()
 	}
 
 	origDir, err := filepath.Abs(flag.Arg(1))
@@ -36,7 +55,18 @@ func main() {
 	state.Loop()
 }
 
-// }}} main.
+func configureLogging() (logFile *os.File, err error) {
+	if *logFilename != "" {
+		logFile, err = os.OpenFile(*logFilename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return nil, err
+		}
+		log.SetOutput(logFile)
+	}
+	return
+}
+
+// }}} main and sundries.
 
 // {{{ type FS.
 
@@ -151,51 +181,89 @@ func (fs *FS) CaseMatchingRetry(name string, op func(string) bool) {
 }
 
 func (fs *FS) MatchAndLogIcasePath(name string) (matchedName string, code fuse.Status) {
-	// TODO Consider cache of recent successful matches (failures more risky so not worth it?).
-	matchedName, found, err := fs.FindMatchingIcasePaths(name)
+	// TODO Consider a cache of recent successful matches, but not for failures.
+
+	matchedNames, err := fs.FindMatchingIcasePaths(name)
 	if err != nil {
-		log.Printf("error searching for %q: %v", name, err)
+		log.Printf("error while searching for %q: %v", name, err)
 		return "", fuse.ToStatus(err)
-	} else if !found {
-		// TODO Remove this case, it's not interesting and might get spammy.
-		log.Printf("no match found for %q", name)
+	} else if len(matchedNames) == 0 {
 		return "", fuse.ENOENT
 	}
-	// TODO notify of summarized matches found in a useful way
-	log.Printf("match found for %q: %q", name, matchedName)
-	return matchedName, fuse.OK
+
+	// TODO Notify of summarized matches found in a useful/parseable way.
+
+	if len(matchedNames) > 1 {
+		log.Printf("%d matches found for %q, using first", len(matchedNames), name)
+	}
+	log.Printf("match found for %q: %q", name, matchedNames[0])
+	return matchedNames[0], fuse.OK
 }
 
-func (fs *FS) FindMatchingIcasePaths(name string) (matchedName string, found bool, err error) {
-	dirPath, fileName := filepath.Split(name)
-	realDirPath := fs.LoopbackFileSystem.GetPath(dirPath)
-	dir, err := os.Open(realDirPath)
-	if err != nil {
-		// TODO deal with case where the directory's name is mismatched case (recurse on realDirPath)
-		return "", false, err
+func (fs *FS) FindMatchingIcasePaths(name string) (matchedNames []string, err error) {
+	if name == "" {
+		return nil, nil
 	}
+
+	dirPath, fileName := filepath.Split(name)
+	if dirPath != "" && dirPath[len(dirPath)-1] == filepath.Separator {
+		dirPath = dirPath[:len(dirPath)-1]
+	}
+
+	lowerFileName := strings.ToLower(fileName)
+
+	dir, err := os.Open(fs.LoopbackFileSystem.GetPath(dirPath))
+	if err == nil {
+		// The directory could be opened okay.
+		return dirScan(dirPath, dir, lowerFileName, matchedNames)
+	} else if !os.IsNotExist(err) {
+		// General error opening directory.
+		return nil, err
+	}
+
+	// Directory (or a parent) is a potentially mismatched case.
+	searchDirPaths, err := fs.FindMatchingIcasePaths(dirPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, possibleDirPath := range searchDirPaths {
+		dir, err := os.Open(fs.LoopbackFileSystem.GetPath(possibleDirPath))
+		if err != nil {
+			return nil, err
+		}
+
+		matchedNames, err = dirScan(possibleDirPath, dir, lowerFileName, matchedNames)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return matchedNames, nil
+}
+
+// Helper function to scan a directory that might potentially contain a
+// matching file. Closes dir on return.
+func dirScan(dirPath string, dir *os.File, lowerFileName string, matchedNames []string) ([]string, error) {
 	defer dir.Close()
 
-	maxEntries := 100
 	var dirEntries []string
-	lowerFileName := strings.ToLower(fileName)
+	var err error
+
+	maxEntries := 100
 	for err = nil; err == nil; dirEntries, err = dir.Readdirnames(maxEntries) {
 		for _, entry := range dirEntries {
 			if lowerFileName == strings.ToLower(entry) {
 				// Found a match.
-				return filepath.Join(dirPath, entry), true, nil
-				// TODO deal with case of potentially multiple matches. matchIcasePath
-				// should return ([]string,error) instead of (string,bool,error).
+				matchedNames = append(matchedNames, filepath.Join(dirPath, entry))
 			}
 		}
 	}
-
-	if err == io.EOF {
-		// No real error, no match found.
-		return "", false, nil
+	if err != io.EOF {
+		// Broke on reading directory entries.
+		return nil, err
 	}
-	// Broke on reading directory entries.
-	return "", false, err
+	return matchedNames, nil
 }
 
 // }}} Utility methods.
