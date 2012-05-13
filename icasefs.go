@@ -238,29 +238,47 @@ func (fs *FS) StatFs(name string) (out *fuse.StatfsOut) {
 // }}} Simple operations.
 
 // {{{ Creation operations.
+//
+// ENOENT in these cases are caused by a parent of the target not existing,
+// rather than the target itself.
 
-/* TODO func (fs *FS) Link(oldName string, newName string, context *fuse.Context) (code fuse.Status)
-
-func (fs *FS) Mkdir(name string, mode uint32, context *fuse.Context) fuse.Status
-
-func (fs *FS) Mknod(name string, mode uint32, dev uint32, context *fuse.Context) fuse.Status*/
-
-func (fs *FS) Create(name string, flags uint32, mode uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
-	log.Printf("Create(%q, %d, %d, %#v)", name, flags, mode, context)
-	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
-		file, code = fs.LoopbackFileSystem.Create(nameAttempt, flags, mode, context)
-		// TODO consider case of creating a new file in a directory whose path's
-		// case mismatches.
+func (fs *FS) Mkdir(name string, mode uint32, context *fuse.Context) (code fuse.Status) {
+	fs.ParentCaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Mkdir(nameAttempt, mode, context)
 		return code == fuse.ENOENT
 	})
 	return
 }
 
-// TODO func (fs *FS) Symlink(value string, linkName string, context *fuse.Context) (code fuse.Status)
+func (fs *FS) Mknod(name string, mode uint32, dev uint32, context *fuse.Context) (code fuse.Status) {
+	fs.ParentCaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Mknod(nameAttempt, mode, dev, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Create(name string, flags uint32, mode uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
+	fs.ParentCaseMatchingRetry(name, func(nameAttempt string) bool {
+		file, code = fs.LoopbackFileSystem.Create(nameAttempt, flags, mode, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Symlink(value string, linkName string, context *fuse.Context) (code fuse.Status) {
+	fs.ParentCaseMatchingRetry(linkName, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Symlink(value, nameAttempt, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
 
 // }}} Creation operations.
 
 // {{{ Complex operations.
+
+// TODO func (fs *FS) Link(oldName string, newName string, context *fuse.Context) (code fuse.Status)
 
 // TODO func (fs *FS) Rename(oldName string, newName string, context *fuse.Context) (code fuse.Status)
 
@@ -268,7 +286,7 @@ func (fs *FS) Create(name string, flags uint32, mode uint32, context *fuse.Conte
 
 // }}} Methods implementing fuse.FileSystem.
 
-// {{{ Utility methods.
+// {{{ Case matching methods.
 
 // CaseMatchingRetry attempts the operation for the given path with
 // case-insentive retry. If the operation returns true, then it attempts to
@@ -283,6 +301,21 @@ func (fs *FS) CaseMatchingRetry(name string, op func(string) bool) {
 	matchedName, code := fs.MatchAndLogIcasePath(name)
 	if code.Ok() {
 		op(matchedName)
+	}
+}
+
+// ParentCaseMatchingRetry is similar to CaseMatchingRetry, but attempts case
+// matching on the parent directory, without trying to match on the base name.
+func (fs *FS) ParentCaseMatchingRetry(name string, op func(string) bool) {
+	if !op(name) {
+		return
+	}
+
+	dirPath, fileName := pathSplit(name)
+
+	matchedName, code := fs.MatchAndLogIcasePath(dirPath)
+	if code.Ok() {
+		op(filepath.Join(matchedName, fileName))
 	}
 }
 
@@ -311,10 +344,7 @@ func (fs *FS) FindMatchingIcasePaths(name string) (matchedNames []string, err er
 		return nil, nil
 	}
 
-	dirPath, fileName := filepath.Split(name)
-	if dirPath != "" && dirPath[len(dirPath)-1] == filepath.Separator {
-		dirPath = dirPath[:len(dirPath)-1]
-	}
+	dirPath, fileName := pathSplit(name)
 
 	lowerFileName := strings.ToLower(fileName)
 
@@ -348,6 +378,12 @@ func (fs *FS) FindMatchingIcasePaths(name string) (matchedNames []string, err er
 	return matchedNames, nil
 }
 
+// }}} Case matching methods.
+
+// }}} type FS.
+
+// {{{ Utility functions.
+
 // Helper function to scan a directory that might potentially contain a
 // matching file. Closes dir on return.
 func dirScan(dirPath string, dir *os.File, lowerFileName string, matchedNames []string) ([]string, error) {
@@ -372,6 +408,14 @@ func dirScan(dirPath string, dir *os.File, lowerFileName string, matchedNames []
 	return matchedNames, nil
 }
 
-// }}} Utility methods.
+// pathSplit is similar to filepath.Split, but removes any trailing / from the
+// directory component.
+func pathSplit(name string) (dir, file string) {
+	dir, file = filepath.Split(name)
+	if dir != "" && dir[len(dir)-1] == filepath.Separator {
+		dir = dir[:len(dir)-1]
+	}
+	return dir, file
+}
 
-// }}} type FS.
+// }}} Utility functions.

@@ -23,13 +23,14 @@ function create_test_dirs() {
 }
 
 function setup() {
+    make || FATAL "Could not compile icasefs"
+
     mkdir scratch $MNT
     create_test_dirs $ROOT $ROOT/{empty,items}
     create_test_files $ROOT/file_in_root
     create_test_files $ROOT/items/{lowercase,UPPERCASE,MixedCase}
     create_test_files $ROOT/ambiguous_{file,FILE}
 
-    make || exit 1
     ./icasefs -log_filename=icasefs.log $MNT $ROOT &
 
     # Hacky sleep to wait for the filesystem to come up.
@@ -74,6 +75,11 @@ function ASSERT_CONTAINS() {
     grep -q $1 $2 || FAIL "File $2 does not contain $1"
 }
 
+function ASSERT_SYMLINK() {
+    ln -s $1 $2 || FAIL "Could not create symlink: $2"
+    cleanup_files="$cleanup_files $2"
+}
+
 setup
 
 # Files whose name exists as-is should exist as normal.
@@ -99,6 +105,16 @@ ASSERT_EXISTS $MNT/created_file
 # And append to it.
 ASSERT_APPEND_FILE $MNT/created_file
 ASSERT_CONTAINS appended $MNT/created_file
+
+# Create file in directory with different case.
+ASSERT_CREATE_FILE $MNT/ItEms/created_file
+
+# Create symlink.
+ASSERT_SYMLINK lowercase $MNT/ItEms/created_symlink
+ASSERT_EXISTS $MNT/ItEms/created_symlink
+
+# Create directory.
+ASSERT_MKDIR $MNT/ItEms/created_directory
 
 teardown
 
