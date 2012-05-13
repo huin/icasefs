@@ -101,6 +101,14 @@ func (fs *FS) SetXAttr(name string, attr string, data []byte, flags int, context
 func (fs *FS) Open(name string, flags uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		file, code = fs.LoopbackFileSystem.Open(nameAttempt, flags, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Create(name string, flags uint32, mode uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		file, code = fs.LoopbackFileSystem.Create(nameAttempt, flags, mode, context)
 		// TODO consider case of creating a new file in a directory whose path's
 		// case mismatches.
 		return code == fuse.ENOENT
