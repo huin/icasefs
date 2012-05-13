@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/hanwen/go-fuse/fuse"
+	"github.com/hanwen/go-fuse/raw"
 )
 
 // {{{ flags.
@@ -82,6 +84,8 @@ func NewFS(root string) *FS {
 
 // {{{ Methods implementing fuse.FileSystem.
 
+// {{{ Simple operations.
+
 func (fs *FS) GetAttr(name string, context *fuse.Context) (attr *fuse.Attr, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		attr, code = fs.LoopbackFileSystem.GetAttr(nameAttempt, context)
@@ -90,7 +94,61 @@ func (fs *FS) GetAttr(name string, context *fuse.Context) (attr *fuse.Attr, code
 	return
 }
 
-// {{{ Extended attributes.
+func (fs *FS) Chmod(name string, mode uint32, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Chmod(nameAttempt, mode, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Chown(name string, uid uint32, gid uint32, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Chown(nameAttempt, uid, gid, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Utimens(name string, AtimeNs int64, MtimeNs int64, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Utimens(nameAttempt, AtimeNs, MtimeNs, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Truncate(name string, size uint64, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Truncate(nameAttempt, size, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Access(name string, mode uint32, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Access(nameAttempt, mode, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Rmdir(name string, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Rmdir(nameAttempt, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) Unlink(name string, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.Unlink(nameAttempt, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
 
 func (fs *FS) GetXAttr(name string, attribute string, context *fuse.Context) (data []byte, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
@@ -124,10 +182,6 @@ func (fs *FS) SetXAttr(name string, attr string, data []byte, flags int, context
 	return
 }
 
-// }}} Extended attributes.
-
-// {{{ File handling.
-
 func (fs *FS) Open(name string, flags uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		file, code = fs.LoopbackFileSystem.Open(nameAttempt, flags, context)
@@ -135,20 +189,6 @@ func (fs *FS) Open(name string, flags uint32, context *fuse.Context) (file fuse.
 	})
 	return
 }
-
-func (fs *FS) Create(name string, flags uint32, mode uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
-	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
-		file, code = fs.LoopbackFileSystem.Create(nameAttempt, flags, mode, context)
-		// TODO consider case of creating a new file in a directory whose path's
-		// case mismatches.
-		return code == fuse.ENOENT
-	})
-	return
-}
-
-// }}} File handling.
-
-// {{{ Directory handling.
 
 func (fs *FS) OpenDir(name string, context *fuse.Context) (c chan fuse.DirEntry, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
@@ -158,7 +198,73 @@ func (fs *FS) OpenDir(name string, context *fuse.Context) (c chan fuse.DirEntry,
 	return
 }
 
-// }}} Directory handling.
+func (fs *FS) Readlink(name string, context *fuse.Context) (value string, code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		value, code = fs.LoopbackFileSystem.Readlink(nameAttempt, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) StatFs(name string) (out *fuse.StatfsOut) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		// Copied from LoopbackFileSystem.StatFs, as the return code doesn't give
+		// an indication for error reason.
+		s := syscall.Statfs_t{}
+		err := syscall.Statfs(fs.GetPath(name), &s)
+		out = nil
+		if err == nil {
+			out = &fuse.StatfsOut{
+				raw.Kstatfs{
+					Blocks:  s.Blocks,
+					Bsize:   uint32(s.Bsize),
+					Bfree:   s.Bfree,
+					Bavail:  s.Bavail,
+					Files:   s.Files,
+					Ffree:   s.Ffree,
+					Frsize:  uint32(s.Frsize),
+					NameLen: uint32(s.Namelen),
+				},
+			}
+			return false
+		}
+		out = nil
+
+		return os.IsNotExist(err)
+	})
+	return
+}
+
+// }}} Simple operations.
+
+// {{{ Creation operations.
+
+/* TODO func (fs *FS) Link(oldName string, newName string, context *fuse.Context) (code fuse.Status)
+
+func (fs *FS) Mkdir(name string, mode uint32, context *fuse.Context) fuse.Status
+
+func (fs *FS) Mknod(name string, mode uint32, dev uint32, context *fuse.Context) fuse.Status*/
+
+func (fs *FS) Create(name string, flags uint32, mode uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
+	log.Printf("Create(%q, %d, %d, %#v)", name, flags, mode, context)
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		file, code = fs.LoopbackFileSystem.Create(nameAttempt, flags, mode, context)
+		// TODO consider case of creating a new file in a directory whose path's
+		// case mismatches.
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+// TODO func (fs *FS) Symlink(value string, linkName string, context *fuse.Context) (code fuse.Status)
+
+// }}} Creation operations.
+
+// {{{ Complex operations.
+
+// TODO func (fs *FS) Rename(oldName string, newName string, context *fuse.Context) (code fuse.Status)
+
+// }}} Complex operations.
 
 // }}} Methods implementing fuse.FileSystem.
 
