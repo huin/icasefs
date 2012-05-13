@@ -12,6 +12,8 @@ import (
 	"github.com/hanwen/go-fuse/fuse"
 )
 
+// {{{ main.
+
 func main() {
 	flag.Parse()
 	if flag.NArg() != 2 {
@@ -34,6 +36,10 @@ func main() {
 	state.Loop()
 }
 
+// }}} main.
+
+// {{{ type FS.
+
 type FS struct {
 	fuse.LoopbackFileSystem
 }
@@ -44,7 +50,7 @@ func NewFS(root string) *FS {
 	}
 }
 
-// Methods implementing fuse.FileSystem.
+// {{{ Methods implementing fuse.FileSystem.
 
 func (fs *FS) GetAttr(name string, context *fuse.Context) (attr *fuse.Attr, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
@@ -53,6 +59,8 @@ func (fs *FS) GetAttr(name string, context *fuse.Context) (attr *fuse.Attr, code
 	})
 	return
 }
+
+// {{{ Extended attributes.
 
 func (fs *FS) GetXAttr(name string, attribute string, context *fuse.Context) (data []byte, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
@@ -70,6 +78,26 @@ func (fs *FS) ListXAttr(name string, context *fuse.Context) (attributes []string
 	return
 }
 
+func (fs *FS) RemoveXAttr(name string, attr string, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.RemoveXAttr(nameAttempt, attr, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+func (fs *FS) SetXAttr(name string, attr string, data []byte, flags int, context *fuse.Context) (code fuse.Status) {
+	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
+		code = fs.LoopbackFileSystem.SetXAttr(nameAttempt, attr, data, flags, context)
+		return code == fuse.ENOENT
+	})
+	return
+}
+
+// }}} Extended attributes.
+
+// {{{ File handling.
+
 func (fs *FS) Open(name string, flags uint32, context *fuse.Context) (file fuse.File, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		file, code = fs.LoopbackFileSystem.Open(nameAttempt, flags, context)
@@ -80,6 +108,10 @@ func (fs *FS) Open(name string, flags uint32, context *fuse.Context) (file fuse.
 	return
 }
 
+// }}} File handling.
+
+// {{{ Directory handling.
+
 func (fs *FS) OpenDir(name string, context *fuse.Context) (c chan fuse.DirEntry, code fuse.Status) {
 	fs.CaseMatchingRetry(name, func(nameAttempt string) bool {
 		c, code = fs.LoopbackFileSystem.OpenDir(nameAttempt, context)
@@ -88,7 +120,11 @@ func (fs *FS) OpenDir(name string, context *fuse.Context) (c chan fuse.DirEntry,
 	return
 }
 
-// Utility methods.
+// }}} Directory handling.
+
+// }}} Methods implementing fuse.FileSystem.
+
+// {{{ Utility methods.
 
 // CaseMatchingRetry attempts the operation for the given path with
 // case-insentive retry. If the operation returns true, then it attempts to
@@ -153,3 +189,7 @@ func (fs *FS) FindMatchingIcasePaths(name string) (matchedName string, found boo
 	// Broke on reading directory entries.
 	return "", false, err
 }
+
+// }}} Utility methods.
+
+// }}} type FS.
