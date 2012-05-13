@@ -280,7 +280,42 @@ func (fs *FS) Symlink(value string, linkName string, context *fuse.Context) (cod
 
 // TODO func (fs *FS) Link(oldName string, newName string, context *fuse.Context) (code fuse.Status)
 
-// TODO func (fs *FS) Rename(oldName string, newName string, context *fuse.Context) (code fuse.Status)
+func (fs *FS) Rename(oldName string, newName string, context *fuse.Context) (code fuse.Status) {
+	code = fs.LoopbackFileSystem.Rename(oldName, newName, context)
+	if code != fuse.ENOENT {
+		return code
+	}
+
+	// We need oldName to exist.
+	if _, err := os.Stat(oldName); err != nil {
+		if os.IsNotExist(err) {
+			oldName, code = fs.MatchAndLogIcasePath(oldName)
+			if !code.Ok() {
+				return code
+			}
+		} else {
+			return fuse.ToStatus(err)
+		}
+	}
+
+	// We need the parent of newName to exist.
+	parentNewName, baseNewName := pathSplit(newName)
+	if parentNewName != "" {
+		if _, err := os.Stat(parentNewName); err != nil {
+			if os.IsNotExist(err) {
+				parentNewName, code = fs.MatchAndLogIcasePath(parentNewName)
+				if !code.Ok() {
+					return code
+				}
+				newName = filepath.Join(parentNewName, baseNewName)
+			} else {
+				return fuse.ToStatus(err)
+			}
+		}
+	}
+
+	return fs.LoopbackFileSystem.Rename(oldName, newName, context)
+}
 
 // }}} Complex operations.
 
@@ -289,7 +324,7 @@ func (fs *FS) Symlink(value string, linkName string, context *fuse.Context) (cod
 // {{{ Case matching methods.
 
 // CaseMatchingRetry attempts the operation for the given path with
-// case-insentive retry. If the operation returns true, then it attempts to
+// case-insensitive retry. If the operation returns true, then it attempts to
 // find a new case-insensitive path, and will attempt the operation once again
 // with a match - iff it finds one. Note that even if this second attempt
 // returns true, it will not be called a third time.
@@ -311,11 +346,9 @@ func (fs *FS) ParentCaseMatchingRetry(name string, op func(string) bool) {
 		return
 	}
 
-	dirPath, fileName := pathSplit(name)
-
-	matchedName, code := fs.MatchAndLogIcasePath(dirPath)
+	matchedName, code := fs.ParentMatchAndLogIcasePath(name)
 	if code.Ok() {
-		op(filepath.Join(matchedName, fileName))
+		op(matchedName)
 	}
 }
 
@@ -337,6 +370,20 @@ func (fs *FS) MatchAndLogIcasePath(name string) (matchedName string, code fuse.S
 	}
 	log.Printf("match found for %q: %q", name, matchedNames[0])
 	return matchedNames[0], fuse.OK
+}
+
+// ParentMatchAndLogIcasePath is the same as MatchAndLogIcasePath, but attempts
+// case matching on the parent directory, without trying to match on the base
+// name.
+func (fs *FS) ParentMatchAndLogIcasePath(name string) (matchedName string, code fuse.Status) {
+	dirPath, fileName := pathSplit(name)
+
+	matchedDirPath, code := fs.MatchAndLogIcasePath(dirPath)
+	if !code.Ok() {
+		return "", code
+	}
+
+	return filepath.Join(matchedDirPath, fileName), code
 }
 
 func (fs *FS) FindMatchingIcasePaths(name string) (matchedNames []string, err error) {

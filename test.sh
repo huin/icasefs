@@ -80,6 +80,11 @@ function ASSERT_SYMLINK() {
     cleanup_files="$cleanup_files $2"
 }
 
+function ASSERT_RENAME() {
+    mv $1 $2 || FAIL "Count not rename $1 to $2"
+    cleanup_files="$cleanup_files $2"
+}
+
 setup
 
 # Files whose name exists as-is should exist as normal.
@@ -115,6 +120,14 @@ ASSERT_EXISTS $MNT/ItEms/created_symlink
 
 # Create directory.
 ASSERT_MKDIR $MNT/ItEms/created_directory
+
+# File renaming.
+ASSERT_RENAME $MNT/ItEms/created_file $MNT/renamed
+ASSERT_EXISTS $MNT/renamed
+
+ASSERT_CREATE_FILE $MNT/created_for_move
+ASSERT_RENAME $MNT/created_for_move $MNT/ItEms/created_for_move
+ASSERT_EXISTS $MNT/ItEms/created_for_move
 
 teardown
 
