@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/fuse"
@@ -17,7 +19,8 @@ import (
 // {{{ flags.
 
 var (
-	logFilename = flag.String("log_filename", "", "Log output. Defaults to stderr.")
+	logFilename    = flag.String("log_filename", "", "Log output. Defaults to stderr.")
+	reportFilename = flag.String("report_filename", "", "Record case insensitive matches to this file.")
 )
 
 // }}} flags.
@@ -47,7 +50,7 @@ func main() {
 		log.Fatalf("Error resolving ORIGDIR: %v", err)
 	}
 
-	fs := NewFS(origDir)
+	fs := NewFS(origDir, *reportFilename)
 	nfs := fuse.NewPathNodeFs(fs, nil)
 	state, _, err := fuse.MountNodeFileSystem(flag.Arg(0), nfs, nil)
 	if err != nil {
@@ -55,6 +58,11 @@ func main() {
 	}
 
 	state.Loop()
+
+	err = fs.WriteReport()
+	if err != nil {
+		log.Printf("Failed to write matches: %v", err)
+	}
 }
 
 func configureLogging() (logFile *os.File, err error) {
@@ -70,16 +78,78 @@ func configureLogging() (logFile *os.File, err error) {
 
 // }}} main and sundries.
 
+// {{{ type Report.
+
+type Report struct {
+	mutex sync.Mutex
+
+	outputFilename string
+
+	// Map from a matching path to those that were attempted.
+	matchedFiles map[string][]string
+
+	// The set of attempted paths.
+	pathsSet map[string]struct{}
+}
+
+func NewReport(outputFilename string) *Report {
+	return &Report{
+		outputFilename: outputFilename,
+		matchedFiles:   make(map[string][]string),
+		pathsSet:       make(map[string]struct{}),
+	}
+}
+
+func (report *Report) MergeMatchedNames(path string, matchedNames []string) {
+	if len(matchedNames) == 0 {
+		return
+	}
+
+	report.mutex.Lock()
+	defer report.mutex.Unlock()
+
+	if _, alreadyExists := report.pathsSet[path]; !alreadyExists {
+		report.pathsSet[path] = struct{}{}
+
+		for _, matchedName := range matchedNames {
+			report.matchedFiles[matchedName] = append(report.matchedFiles[matchedName], path)
+		}
+	}
+}
+
+func (report *Report) WriteReport() error {
+	report.mutex.Lock()
+	defer report.mutex.Unlock()
+
+	reportFile, err := os.OpenFile(report.outputFilename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer reportFile.Close()
+
+	encoder := json.NewEncoder(reportFile)
+	encoder.Encode(report.matchedFiles)
+
+	return nil
+}
+
+// }}} type Report.
+
 // {{{ type FS.
 
 type FS struct {
 	fuse.LoopbackFileSystem
+	report *Report
 }
 
-func NewFS(root string) *FS {
-	return &FS{
+func NewFS(root, reportFilename string) *FS {
+	fs := &FS{
 		LoopbackFileSystem: fuse.LoopbackFileSystem{Root: root},
 	}
+	if reportFilename != "" {
+		fs.report = NewReport(reportFilename)
+	}
+	return fs
 }
 
 // {{{ Methods implementing fuse.FileSystem.
@@ -380,8 +450,6 @@ func (fs *FS) MatchAndLogIcasePath(name string) (matchedName string, code fuse.S
 		return "", fuse.ENOENT
 	}
 
-	// TODO Notify of summarized matches found in a useful/parseable way.
-
 	if len(matchedNames) > 1 {
 		log.Printf("%d matches found for %q, using first", len(matchedNames), name)
 	}
@@ -415,7 +483,11 @@ func (fs *FS) FindMatchingIcasePaths(name string) (matchedNames []string, err er
 	dir, err := os.Open(fs.LoopbackFileSystem.GetPath(dirPath))
 	if err == nil {
 		// The directory could be opened okay.
-		return dirScan(dirPath, dir, lowerFileName, matchedNames)
+		matchedNames, err = dirScan(dirPath, dir, lowerFileName, matchedNames)
+		if err != nil {
+			fs.MergeMatchedNames(name, matchedNames)
+		}
+		return
 	} else if !os.IsNotExist(err) {
 		// General error opening directory.
 		return nil, err
@@ -437,9 +509,23 @@ func (fs *FS) FindMatchingIcasePaths(name string) (matchedNames []string, err er
 		if err != nil {
 			return nil, err
 		}
+		fs.MergeMatchedNames(name, matchedNames)
 	}
 
 	return matchedNames, nil
+}
+
+func (fs *FS) MergeMatchedNames(path string, matchedNames []string) {
+	if fs.report != nil {
+		fs.report.MergeMatchedNames(path, matchedNames)
+	}
+}
+
+func (fs *FS) WriteReport() error {
+	if fs.report != nil {
+		return fs.report.WriteReport()
+	}
+	return nil
 }
 
 // }}} Case matching methods.

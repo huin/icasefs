@@ -31,7 +31,7 @@ function setup() {
     create_test_files $ROOT/items/{lowercase,UPPERCASE,MixedCase}
     create_test_files $ROOT/ambiguous_{file,FILE}
 
-    ./icasefs -log_filename=icasefs.log $MNT $ROOT &
+    ./icasefs -log_filename=icasefs.log -report_filename=report.json $MNT $ROOT &
 
     # Hacky sleep to wait for the filesystem to come up.
     sleep 0.2
